@@ -15,7 +15,7 @@ static PLT_THREAD decoderThread;
 
 static unsigned short lastSeq;
 
-static int receivedDataFromPeer;
+static bool receivedDataFromPeer;
 
 #define MAX_PACKET_SIZE 1400
 
@@ -23,32 +23,6 @@ static int receivedDataFromPeer;
 // it needs to be. We need a cushion in case our thread gets blocked
 // for longer than normal.
 #define RTP_RECV_BUFFER (64 * 1024)
-
-#define SAMPLE_RATE 48000
-
-static OPUS_MULTISTREAM_CONFIGURATION opusStereoConfig = {
-    .sampleRate = SAMPLE_RATE,
-    .channelCount = 2,
-    .streams = 1,
-    .coupledStreams = 1,
-    .mapping = {0, 1}
-};
-
-static OPUS_MULTISTREAM_CONFIGURATION opus51SurroundConfig = {
-    .sampleRate = SAMPLE_RATE,
-    .channelCount = 6,
-    .streams = 4,
-    .coupledStreams = 2,
-    .mapping = {0, 4, 1, 5, 2, 3}
-};
-
-static OPUS_MULTISTREAM_CONFIGURATION opus51HighSurroundConfig = {
-        .sampleRate = SAMPLE_RATE,
-        .channelCount = 6,
-        .streams = 6,
-        .coupledStreams = 0,
-        .mapping = {0, 1, 2, 3, 4, 5}
-};
 
 typedef struct _QUEUED_AUDIO_PACKET {
     // data must remain at the front
@@ -66,7 +40,7 @@ void initializeAudioStream(void) {
     LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
     RtpqInitializeQueue(&rtpReorderQueue, RTPQ_DEFAULT_MAX_SIZE, RTPQ_DEFAULT_QUEUE_TIME);
     lastSeq = 0;
-    receivedDataFromPeer = 0;
+    receivedDataFromPeer = false;
 }
 
 static void freePacketList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
@@ -95,7 +69,7 @@ static void UdpPingThreadProc(void* context) {
     SOCK_RET err;
 
     memcpy(&saddr, &RemoteAddr, sizeof(saddr));
-    saddr.sin6_port = htons(AUDIO_STREAM_PORT);
+    saddr.sin6_port = htons(StreamConfig.audioStreamPort);
 
     // Send PING every second until we get data back then every 5 seconds after that.
     while (!PltIsThreadInterrupted(&udpPingThread)) {
@@ -106,17 +80,11 @@ static void UdpPingThreadProc(void* context) {
             return;
         }
 
-        // Send less frequently if we've received data from our peer
-        if (receivedDataFromPeer) {
-            PltSleepMsInterruptible(&udpPingThread, 5000);
-        }
-        else {
-            PltSleepMsInterruptible(&udpPingThread, 1000);
-        }
+        PltSleepMsInterruptible(&udpPingThread, 500);
     }
 }
 
-static int queuePacketToLbq(PQUEUED_AUDIO_PACKET* packet) {
+static bool queuePacketToLbq(PQUEUED_AUDIO_PACKET* packet) {
     int err;
 
     err = LbqOfferQueueItem(&packetQueue, *packet, &(*packet)->q.lentry);
@@ -129,10 +97,10 @@ static int queuePacketToLbq(PQUEUED_AUDIO_PACKET* packet) {
         freePacketList(LbqFlushQueueItems(&packetQueue));
     }
     else if (err == LBQ_INTERRUPTED) {
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
 static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
@@ -154,20 +122,22 @@ static void ReceiveThreadProc(void* context) {
     PRTP_PACKET rtp;
     PQUEUED_AUDIO_PACKET packet;
     int queueStatus;
-    int useSelect;
+    bool useSelect;
     int packetsToDrop = 500 / AudioPacketDuration;
+    int waitingForAudioMs;
 
     packet = NULL;
 
     if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
         // SO_RCVTIMEO failed, so use select() to wait
-        useSelect = 1;
+        useSelect = true;
     }
     else {
         // SO_RCVTIMEO timeout set for recv()
-        useSelect = 0;
+        useSelect = false;
     }
 
+    waitingForAudioMs = 0;
     while (!PltIsThreadInterrupted(&receiveThread)) {
         if (packet == NULL) {
             packet = (PQUEUED_AUDIO_PACKET)malloc(sizeof(*packet));
@@ -186,6 +156,10 @@ static void ReceiveThreadProc(void* context) {
         }
         else if (packet->size == 0) {
             // Receive timed out; try again
+            
+            if (!receivedDataFromPeer) {
+                waitingForAudioMs += UDP_RECV_POLL_TIMEOUT_MS;
+            }
 
             // If we hit this path, there are no queued audio packets on the host PC,
             // so we don't need to drop anything.
@@ -193,7 +167,7 @@ static void ReceiveThreadProc(void* context) {
             continue;
         }
 
-        if (packet->size < sizeof(RTP_PACKET)) {
+        if (packet->size < (int)sizeof(RTP_PACKET)) {
             // Runt packet
             continue;
         }
@@ -204,9 +178,10 @@ static void ReceiveThreadProc(void* context) {
             continue;
         }
 
-        // We've received data, so we can stop sending our ping packets
-        // as quickly, since we're now just keeping the NAT session open.
-        receivedDataFromPeer = 1;
+        if (!receivedDataFromPeer) {
+            receivedDataFromPeer = true;
+            Limelog("Received first audio packet after %d ms\n", waitingForAudioMs);
+        }
 
         // GFE accumulates audio samples before we are ready to receive them,
         // so we will drop the first 100 packets to avoid accumulating latency
@@ -285,6 +260,10 @@ static void DecoderThreadProc(void* context) {
 }
 
 void stopAudioStream(void) {
+    if (!receivedDataFromPeer) {
+        Limelog("No audio traffic was ever received from the host!\n");
+    }
+
     AudioCallbacks.stop();
 
     PltInterruptThread(&udpPingThread);
@@ -319,22 +298,16 @@ int startAudioStream(void* audioContext, int arFlags) {
     int err;
     OPUS_MULTISTREAM_CONFIGURATION chosenConfig;
 
-    // TODO: Get these from RTSP ANNOUNCE surround-params
-    if (StreamConfig.audioConfiguration == AUDIO_CONFIGURATION_STEREO) {
-        chosenConfig = opusStereoConfig;
-    }
-    else if (StreamConfig.audioConfiguration == AUDIO_CONFIGURATION_51_SURROUND) {
-        if (HighQualitySurroundEnabled) {
-            LC_ASSERT(HighQualitySurroundSupported);
-            chosenConfig = opus51HighSurroundConfig;
-        }
-        else {
-            chosenConfig = opus51SurroundConfig;
-        }
+    if (HighQualitySurroundEnabled) {
+        LC_ASSERT(HighQualitySurroundSupported);
+        LC_ASSERT(HighQualityOpusConfig.channelCount != 0);
+        LC_ASSERT(HighQualityOpusConfig.streams != 0);
+        chosenConfig = HighQualityOpusConfig;
     }
     else {
-        Limelog("Invalid audio configuration: %d\n", StreamConfig.audioConfiguration);
-        return -1;
+        LC_ASSERT(NormalQualityOpusConfig.channelCount != 0);
+        LC_ASSERT(NormalQualityOpusConfig.streams != 0);
+        chosenConfig = NormalQualityOpusConfig;
     }
 
     chosenConfig.samplesPerFrame = 48 * AudioPacketDuration;

@@ -5,12 +5,6 @@
 #define MAX_SDP_HEADER_LEN 128
 #define MAX_SDP_TAIL_LEN 128
 
-#define CHANNEL_COUNT_STEREO 2
-#define CHANNEL_COUNT_51_SURROUND 6
-
-#define CHANNEL_MASK_STEREO 0x3
-#define CHANNEL_MASK_51_SURROUND 0xFC
-
 typedef struct _SDP_OPTION {
     char name[MAX_OPTION_NAME_LEN + 1];
     void* payload;
@@ -135,11 +129,11 @@ static int addGen3Options(PSDP_OPTION* head, char* addrStr) {
     return err;
 }
 
-static int addGen4Options(PSDP_OPTION *head, char *addrStr) {
+static int addGen4Options(PSDP_OPTION* head, char* addrStr) {
     char payloadStr[92];
     int err = 0;
 
-    sprintf(payloadStr, "rtsp://%s:%d", addrStr, RTSP_SETUP_PORT);
+    sprintf(payloadStr, "rtsp://%s:%d", addrStr, StreamConfig.rtspSetupPort);
     err |= addAttributeString(head, "x-nv-general.serverAddress", payloadStr);
 
     return err;
@@ -167,7 +161,7 @@ static int addGen5Options(PSDP_OPTION* head) {
     return err;
 }
 
-static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
+static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     PSDP_OPTION optionHead;
     char payloadStr[92];
     int audioChannelCount;
@@ -252,9 +246,23 @@ static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
     
     err |= addAttributeString(&optionHead, "x-nv-vqos[0].videoQualityScoreUpdateTime", "5000");
 
-    // Enable DSCP marking to hopefully increase QoS priority
-    err |= addAttributeString(&optionHead, "x-nv-vqos[0].qosTrafficType", "5");
-    err |= addAttributeString(&optionHead, "x-nv-aqos.qosTrafficType", "4");
+    // If the remote host is local (RFC 1918), enable QoS tagging for our traffic. Windows qWave
+    // will disable it if the host is off-link, *however* Windows may get it wrong in cases where
+    // the host is directly connected to the Internet without a NAT. In this case, it may send DSCP
+    // marked traffic off-link and it could lead to black holes due to misconfigured ISP hardware
+    // or CPE. For this reason, we only enable it in cases where it looks like it will work.
+    //
+    // Even though IPv6 hardware should be much less likely to have this issue, we can't tell
+    // if our address is a NAT64 synthesized IPv6 address or true end-to-end IPv6. If it's the
+    // former, it may have the same problem as other IPv4 traffic.
+    if (StreamConfig.streamingRemotely == STREAM_CFG_LOCAL) {
+        err |= addAttributeString(&optionHead, "x-nv-vqos[0].qosTrafficType", "5");
+        err |= addAttributeString(&optionHead, "x-nv-aqos.qosTrafficType", "4");
+    }
+    else {
+        err |= addAttributeString(&optionHead, "x-nv-vqos[0].qosTrafficType", "0");
+        err |= addAttributeString(&optionHead, "x-nv-aqos.qosTrafficType", "0");
+    }
 
     if (AppVersionQuad[0] == 3) {
         err |= addGen3Options(&optionHead, urlSafeAddr);
@@ -266,14 +274,8 @@ static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
         err |= addGen5Options(&optionHead);
     }
 
-    if (StreamConfig.audioConfiguration == AUDIO_CONFIGURATION_51_SURROUND) {
-        audioChannelCount = CHANNEL_COUNT_51_SURROUND;
-        audioChannelMask = CHANNEL_MASK_51_SURROUND;
-    }
-    else {
-        audioChannelCount = CHANNEL_COUNT_STEREO;
-        audioChannelMask = CHANNEL_MASK_STEREO;
-    }
+    audioChannelCount = CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration);
+    audioChannelMask = CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration);
 
     if (AppVersionQuad[0] >= 4) {
         unsigned char slicesPerFrame;
@@ -363,23 +365,25 @@ static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
 
             // Let the audio stream code know that it needs to disable coupled streams when
             // decoding this audio stream.
-            HighQualitySurroundEnabled = 1;
+            HighQualitySurroundEnabled = true;
 
             // Use 5 ms frames since we don't have a slow decoder
             AudioPacketDuration = 5;
         }
         else {
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.AudioQuality", "0");
-            HighQualitySurroundEnabled = 0;
+            HighQualitySurroundEnabled = false;
 
-            if ((AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) != 0 ||
-                ((AudioCallbacks.capabilities & CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION) != 0 &&
-                    OriginalVideoBitrate < LOW_AUDIO_BITRATE_TRESHOLD)) {
-                // Use 20 ms packets for slow decoders and networks to save CPU and bandwidth
+            if ((AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) != 0) {
+                // Use 20 ms packets for slow decoders to save CPU time
                 AudioPacketDuration = 20;
             }
+            else if ((AudioCallbacks.capabilities & CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION) != 0 &&
+                      OriginalVideoBitrate < LOW_AUDIO_BITRATE_TRESHOLD) {
+                // Use 10 ms packets for slow networks to balance latency and bandwidth usage
+                AudioPacketDuration = 10;
+            }
             else {
-
                 // Use 5 ms packets by default for lowest latency
                 AudioPacketDuration = 5;
             }
@@ -391,6 +395,9 @@ static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
     else {
         // 5 ms duration for legacy servers
         AudioPacketDuration = 5;
+
+        // High quality audio mode not supported on legacy servers
+        HighQualitySurroundEnabled = false;
     }
 
     if (AppVersionQuad[0] >= 7) {
@@ -422,11 +429,11 @@ static int fillSdpTail(char* buffer) {
     return sprintf(buffer,
         "t=0 0\r\n"
         "m=video %d  \r\n",
-        AppVersionQuad[0] < 4 ? FIRST_FRAME_PORT : VIDEO_STREAM_PORT);
+        AppVersionQuad[0] < 4 ? StreamConfig.firstFramePort : StreamConfig.videoStreamPort);
 }
 
 // Get the SDP attributes for the stream config
-char *getSdpPayloadForStreamConfig(int rtspClientVersion, int *length) {
+char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length) {
     PSDP_OPTION attributeList;
     int offset;
     char* payload;

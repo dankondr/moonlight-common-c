@@ -8,9 +8,9 @@
 
 static SOCKET inputSock = INVALID_SOCKET;
 static unsigned char currentAesIv[16];
-static int initialized;
+static bool initialized;
 static EVP_CIPHER_CTX* cipherContext;
-static int cipherInitialized;
+static bool cipherInitialized;
 
 static LINKED_BLOCKING_QUEUE packetQueue;
 static PLT_THREAD inputSendThread;
@@ -25,7 +25,8 @@ typedef struct _PACKET_HOLDER {
     int packetLength;
     union {
         NV_KEYBOARD_PACKET keyboard;
-        NV_MOUSE_MOVE_PACKET mouseMove;
+        NV_REL_MOUSE_MOVE_PACKET mouseMoveRel;
+        NV_ABS_MOUSE_MOVE_PACKET mouseMoveAbs;
         NV_MOUSE_BUTTON_PACKET mouseButton;
         NV_CONTROLLER_PACKET controller;
         NV_MULTI_CONTROLLER_PACKET multiController;
@@ -44,11 +45,10 @@ int initializeInputStream(void) {
     memcpy(currentAesIv, StreamConfig.remoteInputAesIv, sizeof(currentAesIv));
     
     // Initialized on first packet
-    cipherInitialized = 0;
+    cipherInitialized = false;
     
     LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
 
-    initialized = 1;
     return 0;
 }
 
@@ -58,7 +58,7 @@ void destroyInputStream(void) {
     
     if (cipherInitialized) {
         EVP_CIPHER_CTX_free(cipherContext);
-        cipherInitialized = 0;
+        cipherInitialized = false;
     }
 
     entry = LbqDestroyLinkedBlockingQueue(&packetQueue);
@@ -71,8 +71,6 @@ void destroyInputStream(void) {
 
         entry = nextEntry;
     }
-
-    initialized = 0;
 }
 
 static int addPkcs7PaddingInPlace(unsigned char* plaintext, int plaintextLen) {
@@ -97,7 +95,7 @@ static int encryptData(const unsigned char* plaintext, int plaintextLen,
             if ((cipherContext = EVP_CIPHER_CTX_new()) == NULL) {
                 return -1;
             }
-            cipherInitialized = 1;
+            cipherInitialized = true;
         }
 
         // Gen 7 servers use 128-bit AES GCM
@@ -155,7 +153,7 @@ static int encryptData(const unsigned char* plaintext, int plaintextLen,
                 ret = -1;
                 goto cbc_cleanup;
             }
-            cipherInitialized = 1;
+            cipherInitialized = true;
 
             // Prior to Gen 7, 128-bit AES CBC is used for encryption
             if (EVP_EncryptInit_ex(cipherContext, EVP_aes_128_cbc(), NULL,
@@ -189,7 +187,7 @@ static void inputSendThreadProc(void* context) {
     SOCK_RET err;
     PPACKET_HOLDER holder;
     char encryptedBuffer[MAX_INPUT_PACKET_SIZE];
-    int encryptedSize;
+    uint32_t encryptedSize;
 
     while (!PltIsThreadInterrupted(&inputSendThread)) {
         int encryptedLengthPrefix;
@@ -248,11 +246,11 @@ static void inputSendThreadProc(void* context) {
                 free(controllerBatchHolder);
             }
         }
-        // If it's a mouse move packet, we can also do batching
-        else if (holder->packet.mouseMove.header.packetType == htonl(PACKET_TYPE_MOUSE_MOVE)) {
+        // If it's a relative mouse move packet, we can also do batching
+        else if (holder->packet.mouseMoveRel.header.packetType == htonl(PACKET_TYPE_REL_MOUSE_MOVE)) {
             PPACKET_HOLDER mouseBatchHolder;
-            int totalDeltaX = (short)htons(holder->packet.mouseMove.deltaX);
-            int totalDeltaY = (short)htons(holder->packet.mouseMove.deltaY);
+            int totalDeltaX = (short)htons(holder->packet.mouseMoveRel.deltaX);
+            int totalDeltaY = (short)htons(holder->packet.mouseMoveRel.deltaY);
 
             for (;;) {
                 int partialDeltaX;
@@ -264,12 +262,12 @@ static void inputSendThreadProc(void* context) {
                 }
 
                 // If it's not a mouse move packet, we're done
-                if (mouseBatchHolder->packet.mouseMove.header.packetType != htonl(PACKET_TYPE_MOUSE_MOVE)) {
+                if (mouseBatchHolder->packet.mouseMoveRel.header.packetType != htonl(PACKET_TYPE_REL_MOUSE_MOVE)) {
                     break;
                 }
 
-                partialDeltaX = (short)htons(mouseBatchHolder->packet.mouseMove.deltaX);
-                partialDeltaY = (short)htons(mouseBatchHolder->packet.mouseMove.deltaY);
+                partialDeltaX = (short)htons(mouseBatchHolder->packet.mouseMoveRel.deltaX);
+                partialDeltaY = (short)htons(mouseBatchHolder->packet.mouseMoveRel.deltaY);
 
                 // Check for overflow
                 if (partialDeltaX + totalDeltaX > INT16_MAX ||
@@ -293,14 +291,39 @@ static void inputSendThreadProc(void* context) {
             }
 
             // Update the original packet
-            holder->packet.mouseMove.deltaX = htons((short)totalDeltaX);
-            holder->packet.mouseMove.deltaY = htons((short)totalDeltaY);
+            holder->packet.mouseMoveRel.deltaX = htons((short)totalDeltaX);
+            holder->packet.mouseMoveRel.deltaY = htons((short)totalDeltaY);
+        }
+        // If it's an absolute mouse move packet, we should only send the latest
+        else if (holder->packet.mouseMoveAbs.header.packetType == htonl(PACKET_TYPE_ABS_MOUSE_MOVE)) {
+            for (;;) {
+                PPACKET_HOLDER mouseBatchHolder;
+
+                // Peek at the next packet
+                if (LbqPeekQueueElement(&packetQueue, (void**)&mouseBatchHolder) != LBQ_SUCCESS) {
+                    break;
+                }
+
+                // If it's not a mouse position packet, we're done
+                if (mouseBatchHolder->packet.mouseMoveAbs.header.packetType != htonl(PACKET_TYPE_ABS_MOUSE_MOVE)) {
+                    break;
+                }
+
+                // Remove the mouse position packet
+                if (LbqPollQueueElement(&packetQueue, (void**)&mouseBatchHolder) != LBQ_SUCCESS) {
+                    break;
+                }
+
+                // Replace the current packet with the new one
+                free(holder);
+                holder = mouseBatchHolder;
+            }
         }
 
         // Encrypt the message into the output buffer while leaving room for the length
         encryptedSize = sizeof(encryptedBuffer) - 4;
         err = encryptData((const unsigned char*)&holder->packet, holder->packetLength,
-            (unsigned char*)&encryptedBuffer[4], &encryptedSize);
+            (unsigned char*)&encryptedBuffer[4], (int*)&encryptedSize);
         free(holder);
         if (err != 0) {
             Limelog("Input: Encryption failed: %d\n", (int)err);
@@ -309,7 +332,7 @@ static void inputSendThreadProc(void* context) {
         }
 
         // Prepend the length to the message
-        encryptedLengthPrefix = htonl((unsigned long)encryptedSize);
+        encryptedLengthPrefix = htonl(encryptedSize);
         memcpy(&encryptedBuffer[0], &encryptedLengthPrefix, 4);
 
         if (AppVersionQuad[0] < 5) {
@@ -397,6 +420,9 @@ int startInputStream(void) {
         return err;
     }
 
+    // Allow input packets to be queued now
+    initialized = true;
+
     // GFE will not send haptics events without this magic packet first
     sendEnableHaptics();
 
@@ -405,6 +431,9 @@ int startInputStream(void) {
 
 // Stops the input stream
 int stopInputStream(void) {
+    // No more packets should be queued now
+    initialized = false;
+
     // Signal the input send thread
     LbqSignalQueueShutdown(&packetQueue);
     PltInterruptThread(&inputSendThread);
@@ -433,20 +462,61 @@ int LiSendMouseMoveEvent(short deltaX, short deltaY) {
         return -2;
     }
 
+    if (deltaX == 0 && deltaY == 0) {
+        return 0;
+    }
+
     holder = malloc(sizeof(*holder));
     if (holder == NULL) {
         return -1;
     }
 
-    holder->packetLength = sizeof(NV_MOUSE_MOVE_PACKET);
-    holder->packet.mouseMove.header.packetType = htonl(PACKET_TYPE_MOUSE_MOVE);
-    holder->packet.mouseMove.magic = MOUSE_MOVE_MAGIC;
+    holder->packetLength = sizeof(NV_REL_MOUSE_MOVE_PACKET);
+    holder->packet.mouseMoveRel.header.packetType = htonl(PACKET_TYPE_REL_MOUSE_MOVE);
+    holder->packet.mouseMoveRel.magic = MOUSE_MOVE_REL_MAGIC;
     // On Gen 5 servers, the header code is incremented by one
     if (AppVersionQuad[0] >= 5) {
-        holder->packet.mouseMove.magic++;
+        holder->packet.mouseMoveRel.magic++;
     }
-    holder->packet.mouseMove.deltaX = htons(deltaX);
-    holder->packet.mouseMove.deltaY = htons(deltaY);
+    holder->packet.mouseMoveRel.deltaX = htons(deltaX);
+    holder->packet.mouseMoveRel.deltaY = htons(deltaY);
+
+    err = LbqOfferQueueItem(&packetQueue, holder, &holder->entry);
+    if (err != LBQ_SUCCESS) {
+        free(holder);
+    }
+
+    return err;
+}
+
+// Send a mouse position update to the streaming machine
+int LiSendMousePositionEvent(short x, short y, short referenceWidth, short referenceHeight) {
+    PPACKET_HOLDER holder;
+    int err;
+
+    if (!initialized) {
+        return -2;
+    }
+
+    holder = malloc(sizeof(*holder));
+    if (holder == NULL) {
+        return -1;
+    }
+
+    holder->packetLength = sizeof(NV_ABS_MOUSE_MOVE_PACKET);
+    holder->packet.mouseMoveAbs.header.packetType = htonl(PACKET_TYPE_ABS_MOUSE_MOVE);
+    holder->packet.mouseMoveAbs.magic = MOUSE_MOVE_ABS_MAGIC;
+    holder->packet.mouseMoveAbs.x = htons(x);
+    holder->packet.mouseMoveAbs.y = htons(y);
+    holder->packet.mouseMoveAbs.unused = 0;
+
+    // There appears to be a rounding error in GFE's scaling calculation which prevents
+    // the cursor from reaching the far edge of the screen when streaming at smaller
+    // resolutions with a higher desktop resolution (like streaming 720p with a desktop
+    // resolution of 1080p, or streaming 720p/1080p with a desktop resolution of 4K).
+    // Subtracting one from the reference dimensions seems to work around this issue.
+    holder->packet.mouseMoveAbs.width = htons(referenceWidth - 1);
+    holder->packet.mouseMoveAbs.height = htons(referenceHeight - 1);
 
     err = LbqOfferQueueItem(&packetQueue, holder, &holder->entry);
     if (err != LBQ_SUCCESS) {
@@ -500,14 +570,46 @@ int LiSendKeyboardEvent(short keyCode, char keyAction, char modifiers) {
         return -1;
     }
 
-    // Any keyboard event with the META modifier flag is dropped by all known GFE versions.
-    // This prevents us from sending shortcuts involving the meta key (Win+X, Win+Tab, etc).
-    // The catch is that the meta key event itself would actually work if it didn't set its
-    // own modifier flag, so we'll clear that here. This should be safe even if a new GFE
-    // release comes out that stops dropping events with MODIFIER_META flag.
-    if ((keyCode & 0x00FF) == 0x5B || // VK_LWIN
-        (keyCode & 0x00FF) == 0x5C) { // VK_RWIN
+    // For proper behavior, the MODIFIER flag must not be set on the modifier key down event itself
+    // for the extended modifiers on the right side of the keyboard. If the MODIFIER flag is set,
+    // GFE will synthesize an errant key down event for the non-extended key, causing that key to be
+    // stuck down after the extended modifier key is raised. For non-extended keys, we must set the
+    // MODIFIER flag for correct behavior.
+    switch (keyCode & 0xFF) {
+    case 0x5B: // VK_LWIN
+    case 0x5C: // VK_RWIN
+        // Any keyboard event with the META modifier flag is dropped by all known GFE versions.
+        // This prevents us from sending shortcuts involving the meta key (Win+X, Win+Tab, etc).
+        // The catch is that the meta key event itself would actually work if it didn't set its
+        // own modifier flag, so we'll clear that here. This should be safe even if a new GFE
+        // release comes out that stops dropping events with MODIFIER_META flag.
         modifiers &= ~MODIFIER_META;
+        break;
+
+    case 0xA0: // VK_LSHIFT
+        modifiers |= MODIFIER_SHIFT;
+        break;
+    case 0xA1: // VK_RSHIFT
+        modifiers &= ~MODIFIER_SHIFT;
+        break;
+
+    case 0xA2: // VK_LCONTROL
+        modifiers |= MODIFIER_CTRL;
+        break;
+    case 0xA3: // VK_RCONTROL
+        modifiers &= ~MODIFIER_CTRL;
+        break;
+
+    case 0xA4: // VK_LMENU
+        modifiers |= MODIFIER_ALT;
+        break;
+    case 0xA5: // VK_RMENU
+        modifiers &= ~MODIFIER_ALT;
+        break;
+
+    default:
+        // No fixups
+        break;
     }
 
     holder->packetLength = sizeof(NV_KEYBOARD_PACKET);
@@ -616,6 +718,10 @@ int LiSendHighResScrollEvent(short scrollAmount) {
 
     if (!initialized) {
         return -2;
+    }
+
+    if (scrollAmount == 0) {
+        return 0;
     }
 
     holder = malloc(sizeof(*holder));

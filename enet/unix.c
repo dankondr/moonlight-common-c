@@ -8,7 +8,6 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/time.h>
-#include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <unistd.h>
@@ -20,8 +19,8 @@
 #include "enet/enet.h"
 
 #if defined(__APPLE__)
-#ifdef HAS_POLL
-#undef HAS_POLL
+#ifndef HAS_POLL
+#define HAS_POLL 1
 #endif
 #ifndef HAS_FCNTL
 #define HAS_FCNTL 1
@@ -76,6 +75,9 @@
 #ifndef HAS_IOCTL
 #define HAS_IOCTL 1
 #endif
+#ifndef HAS_POLL
+#define HAS_POLL 1
+#endif
 #endif
 
 #ifdef HAS_FCNTL
@@ -87,7 +89,7 @@
 #endif
 
 #ifdef HAS_POLL
-#include <sys/poll.h>
+#include <poll.h>
 #endif
 
 #ifndef HAS_SOCKLEN_T
@@ -317,6 +319,30 @@ enet_socket_set_option (ENetSocket socket, ENetSocketOption option, int value)
 
         case ENET_SOCKOPT_NODELAY:
             result = setsockopt (socket, IPPROTO_TCP, TCP_NODELAY, (char *) & value, sizeof (int));
+            break;
+
+        case ENET_SOCKOPT_QOS:
+#ifdef SO_NET_SERVICE_TYPE
+            // iOS/macOS
+            value = value ? NET_SERVICE_TYPE_VO : NET_SERVICE_TYPE_BE;
+            result = setsockopt (socket, SOL_SOCKET, SO_NET_SERVICE_TYPE, (char *) & value, sizeof (int));
+#else
+#ifdef IP_TOS
+            // UNIX - IPv4
+            value = value ? 46 << 2 : 0; // DSCP: Expedited Forwarding
+            result = setsockopt (socket, IPPROTO_IP, IP_TOS, (char *) & value, sizeof (int));
+#endif
+#ifdef IPV6_TCLASS
+            // UNIX - IPv6
+            value = value ? 46 << 2: 0; // DSCP: Expedited Forwarding
+            result = setsockopt (socket, IPPROTO_IPV6, IPV6_TCLASS, (char *) & value, sizeof (int));
+#endif
+#ifdef SO_PRIORITY
+            // Linux
+            value = value ? 6 : 0; // Max priority without NET_CAP_ADMIN
+            result = setsockopt (socket, SOL_SOCKET, SO_PRIORITY, (char *) & value, sizeof (int));
+#endif
+#endif /* SO_NET_SERVICE_TYPE */
             break;
 
         default:

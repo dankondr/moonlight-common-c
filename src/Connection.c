@@ -3,9 +3,9 @@
 
 static int stage = STAGE_NONE;
 static ConnListenerConnectionTerminated originalTerminationCallback;
-static int alreadyTerminated;
+static bool alreadyTerminated;
 static PLT_THREAD terminationCallbackThread;
-static long terminationCallbackErrorCode;
+static int terminationCallbackErrorCode;
 
 // Common globals
 char* RemoteAddrString;
@@ -17,9 +17,11 @@ CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
 DECODER_RENDERER_CALLBACKS VideoCallbacks;
 AUDIO_RENDERER_CALLBACKS AudioCallbacks;
 int NegotiatedVideoFormat;
-volatile int ConnectionInterrupted;
-int HighQualitySurroundSupported;
-int HighQualitySurroundEnabled;
+volatile bool ConnectionInterrupted;
+bool HighQualitySurroundSupported;
+bool HighQualitySurroundEnabled;
+OPUS_MULTISTREAM_CONFIGURATION NormalQualityOpusConfig;
+OPUS_MULTISTREAM_CONFIGURATION HighQualityOpusConfig;
 int OriginalVideoBitrate;
 int AudioPacketDuration;
 
@@ -48,13 +50,13 @@ const char* LiGetStageName(int stage) {
 // so it is not safe to start another connection before LiStartConnection() returns.
 void LiInterruptConnection(void) {
     // Signal anyone waiting on the global interrupted flag
-    ConnectionInterrupted = 1;
+    ConnectionInterrupted = true;
 }
 
 // Stop the connection by undoing the step at the current stage and those before it
 void LiStopConnection(void) {
     // Disable termination callbacks now
-    alreadyTerminated = 1;
+    alreadyTerminated = true;
 
     // Set the interrupted flag
     LiInterruptConnection();
@@ -141,7 +143,7 @@ static void terminationCallbackThreadFunc(void* context)
 // calls LiStopConnection() in the callback when the cleanup code
 // attempts to join the thread that the termination callback (and LiStopConnection)
 // is running on.
-static void ClInternalConnectionTerminated(long errorCode)
+static void ClInternalConnectionTerminated(int errorCode)
 {
     int err;
 
@@ -151,7 +153,7 @@ static void ClInternalConnectionTerminated(long errorCode)
     }
 
     terminationCallbackErrorCode = errorCode;
-    alreadyTerminated = 1;
+    alreadyTerminated = true;
 
     // Invoke the termination callback on a separate thread
     err = PltCreateThread("AsyncTerm", terminationCallbackThreadFunc, NULL, &terminationCallbackThread);
@@ -171,11 +173,32 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     void* audioContext, int arFlags) {
     int err;
 
+    // Replace missing callbacks with placeholders
+    fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
+    memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));
+    memcpy(&AudioCallbacks, arCallbacks, sizeof(AudioCallbacks));
+
+    // Hook the termination callback so we can avoid issuing a termination callback
+    // after LiStopConnection() is called.
+    //
+    // Initialize ListenerCallbacks before anything that could call Limelog().
+    originalTerminationCallback = clCallbacks->connectionTerminated;
+    memcpy(&ListenerCallbacks, clCallbacks, sizeof(ListenerCallbacks));
+    ListenerCallbacks.connectionTerminated = ClInternalConnectionTerminated;
+
     NegotiatedVideoFormat = 0;
     memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
     OriginalVideoBitrate = streamConfig->bitrate;
     RemoteAddrString = strdup(serverInfo->address);
     
+    // Validate the audio configuration
+    if (MAGIC_BYTE_FROM_AUDIO_CONFIG(StreamConfig.audioConfiguration) != 0xCA ||
+            CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT) {
+        Limelog("Invalid audio configuration specified\n");
+        err = -1;
+        goto Cleanup;
+    }
+
     // FEC only works in 16 byte chunks, so we must round down
     // the given packet size to the nearest multiple of 16.
     StreamConfig.packetSize -= StreamConfig.packetSize % 16;
@@ -184,6 +207,24 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         Limelog("Invalid packet size specified\n");
         err = -1;
         goto Cleanup;
+    }
+
+    // Height must not be odd or NVENC will fail to initialize
+    if (StreamConfig.height & 0x1) {
+        Limelog("Encoder height must not be odd. Rounding %d to %d\n",
+                StreamConfig.height,
+                StreamConfig.height & ~0x1);
+        StreamConfig.height = StreamConfig.height & ~0x1;
+    }
+
+    // Dimensions over 4096 are only supported with HEVC on NVENC
+    if (!StreamConfig.supportsHevc &&
+            (StreamConfig.width > 4096 || StreamConfig.height > 4096)) {
+        Limelog("WARNING: Streaming at resolutions above 4K using H.264 will likely fail! Trying anyway!\n");
+    }
+    // Dimensions over 8192 aren't supported at all (even on Turing)
+    else if (StreamConfig.width > 8192 || StreamConfig.height > 8192) {
+        Limelog("WARNING: Streaming at resolutions above 8K will likely fail! Trying anyway!\n");
     }
     
     // Extract the appversion from the supplied string
@@ -194,19 +235,8 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         goto Cleanup;
     }
 
-    // Replace missing callbacks with placeholders
-    fixupMissingCallbacks(&drCallbacks, &arCallbacks, &clCallbacks);
-    memcpy(&VideoCallbacks, drCallbacks, sizeof(VideoCallbacks));
-    memcpy(&AudioCallbacks, arCallbacks, sizeof(AudioCallbacks));
-
-    // Hook the termination callback so we can avoid issuing a termination callback
-    // after LiStopConnection() is called
-    originalTerminationCallback = clCallbacks->connectionTerminated;
-    memcpy(&ListenerCallbacks, clCallbacks, sizeof(ListenerCallbacks));
-    ListenerCallbacks.connectionTerminated = ClInternalConnectionTerminated;
-
-    alreadyTerminated = 0;
-    ConnectionInterrupted = 0;
+    alreadyTerminated = false;
+    ConnectionInterrupted = false;
 
     Limelog("Initializing platform...");
     ListenerCallbacks.stageStarting(STAGE_PLATFORM_INIT);
@@ -223,7 +253,13 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Resolving host name...");
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
-    err = resolveHostName(serverInfo->address, AF_UNSPEC, HTTPS_PORT, &RemoteAddr, &RemoteAddrLen);
+    err = resolveHostName(serverInfo->address, AF_UNSPEC, StreamConfig.httpsPort, &RemoteAddr, &RemoteAddrLen);
+    if (err != 0) {
+        err = resolveHostName(serverInfo->address, AF_UNSPEC, StreamConfig.httpPort, &RemoteAddr, &RemoteAddrLen);
+    }
+    if (err != 0) {
+        err = resolveHostName(serverInfo->address, AF_UNSPEC, StreamConfig.rtspSetupPort, &RemoteAddr, &RemoteAddrLen);
+    }
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);

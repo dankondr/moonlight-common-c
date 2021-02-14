@@ -4,21 +4,8 @@
 
 #pragma once
 
-#include "PortConfigCoder.h"
 #include <stdint.h>
-
-static const int *PORTS = pcc_getPortsFromConfig();
-static const int HTTP_PORT = PORTS[CONFIG_HTTP_PORT];
-static const int HTTPS_PORT = PORTS[CONFIG_HTTPS_PORT];
-static const int RTSP_SETUP_PORT = PORTS[CONFIG_RTSP_SETUP_PORT];
-static const int VIDEO_STREAM_PORT = PORTS[CONFIG_VIDEO_STREAM_PORT];
-static const int CONTROL_PORT = PORTS[CONFIG_CONTROL_PORT];
-static const int AUDIO_STREAM_PORT = PORTS[CONFIG_AUDIO_STREAM_PORT];
-static const int FIRST_FRAME_PORT = PORTS[CONFIG_FIRST_FRAME_PORT];
-/*
- * В общем тут у нас как раз таки в интерфейсе пусть задаются порты
- * а этот файл у нас общий, поэтому просто их используем
- */
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,7 +53,7 @@ typedef struct _STREAM_CONFIGURATION {
     int streamingRemotely;
 
     // Specifies the channel configuration of the audio stream.
-    // See AUDIO_CONFIGURATION_XXX constants below.
+    // See AUDIO_CONFIGURATION constants and MAKE_AUDIO_CONFIGURATION() below.
     int audioConfiguration;
     
     // Specifies that the client can accept an H.265 video stream
@@ -105,6 +92,15 @@ typedef struct _STREAM_CONFIGURATION {
     // in /launch and /resume requests.
     char remoteInputAesKey[16];
     char remoteInputAesIv[16];
+
+    // PORTS
+    int httpPort;
+    int httpsPort;
+    int rtspSetupPort;
+    int videoStreamPort;
+    int controlPort;
+    int audioStreamPort;
+    int firstFramePort;
 } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
 // Use this function to zero the stream configuration when allocated on the stack or heap
@@ -149,10 +145,16 @@ typedef struct _DECODE_UNIT {
     // Frame type
     int frameType;
 
-    // Receive time of first buffer. This value uses an implementation-defined epoch.
-    // To compute actual latency values, use LiGetMillis() to get a timestamp that
-    // shares the same epoch as this value.
-    unsigned long long receiveTimeMs;
+    // Receive time of first buffer. This value uses an implementation-defined epoch,
+    // but the same epoch as enqueueTimeMs and LiGetMillis().
+    uint64_t receiveTimeMs;
+
+    // Time the frame was fully assembled and queued for the video decoder to process.
+    // This is also approximately the same time as the final packet was received, so
+    // enqueueTimeMs - receiveTimeMs is the time taken to receive the frame. At the
+    // time the decode unit is passed to submitDecodeUnit(), the total queue delay
+    // can be calculated by LiGetMillis() - enqueueTimeMs.
+    uint64_t enqueueTimeMs;
 
     // Presentation time in milliseconds with the epoch at the first captured frame.
     // This can be used to aid frame pacing or to drop old frames that were queued too
@@ -167,10 +169,31 @@ typedef struct _DECODE_UNIT {
 } DECODE_UNIT, *PDECODE_UNIT;
 
 // Specifies that the audio stream should be encoded in stereo (default)
-#define AUDIO_CONFIGURATION_STEREO 0
+#define AUDIO_CONFIGURATION_STEREO MAKE_AUDIO_CONFIGURATION(2, 0x3)
 
 // Specifies that the audio stream should be in 5.1 surround sound if the PC is able
-#define AUDIO_CONFIGURATION_51_SURROUND 1
+#define AUDIO_CONFIGURATION_51_SURROUND MAKE_AUDIO_CONFIGURATION(6, 0x3F)
+
+// Specifies that the audio stream should be in 7.1 surround sound if the PC is able
+#define AUDIO_CONFIGURATION_71_SURROUND MAKE_AUDIO_CONFIGURATION(8, 0x63F)
+
+// Specifies an audio configuration by channel count and channel mask
+// See https://docs.microsoft.com/en-us/windows-hardware/drivers/audio/channel-mask for channelMask values
+// NOTE: Not all combinations are supported by GFE and/or this library.
+#define MAKE_AUDIO_CONFIGURATION(channelCount, channelMask) \
+    (((channelMask) << 16) | (channelCount << 8) | 0xCA)
+
+// Helper macros for retreiving channel count and channel mask from the audio configuration
+#define CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(x) (((x) >> 8) & 0xFF)
+#define CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(x) (((x) >> 16) & 0xFFFF)
+
+// Helper macro to retreive the surroundAudioInfo parameter value that must be passed in
+// the /launch and /resume HTTPS requests when starting the session.
+#define SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION(x) \
+    (CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(x) << 16 | CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(x))
+
+// The maximum number of channels supported
+#define AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT 8
 
 // Passed to DecoderRendererSetup to indicate that the following video stream will be
 // in H.264 High Profile.
@@ -261,8 +284,10 @@ void LiInitializeVideoCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks);
 // 1 - Front Right
 // 2 - Center
 // 3 - LFE
-// 4 - Surround Left
-// 5 - Surround Right
+// 4 - Back Left
+// 5 - Back Right
+// 6 - Side Left
+// 7 - Side Right
 //
 // If the mapping order does not match the channel order of the audio renderer, you may swap
 // the values in the mismatched indices until the mapping array matches the desired channel order.
@@ -272,7 +297,7 @@ typedef struct _OPUS_MULTISTREAM_CONFIGURATION {
     int streams;
     int coupledStreams;
     int samplesPerFrame;
-    unsigned char mapping[6];
+    unsigned char mapping[AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT];
 } OPUS_MULTISTREAM_CONFIGURATION, *POPUS_MULTISTREAM_CONFIGURATION;
 
 // This callback initializes the audio renderer. The audio configuration parameter
@@ -330,7 +355,7 @@ typedef void(*ConnListenerStageComplete)(int stage);
 // ConnListenerConnectionTerminated() will not be invoked because the connection was
 // not yet fully established. LiInterruptConnection() and LiStopConnection() may
 // result in this callback being invoked, but it is not guaranteed.
-typedef void(*ConnListenerStageFailed)(int stage, long errorCode);
+typedef void(*ConnListenerStageFailed)(int stage, int errorCode);
 
 // This callback is invoked after the connection is successfully established
 typedef void(*ConnListenerConnectionStarted)(void);
@@ -341,7 +366,29 @@ typedef void(*ConnListenerConnectionStarted)(void);
 // non-zero, it means the termination was probably unexpected (loss of network,
 // crash, or similar conditions). This will not be invoked as a result of a call
 // to LiStopConnection() or LiInterruptConnection().
-typedef void(*ConnListenerConnectionTerminated)(long errorCode);
+typedef void(*ConnListenerConnectionTerminated)(int errorCode);
+
+// This error code is passed to ConnListenerConnectionTerminated() when the stream
+// is being gracefully terminated by the host. It usually means the app on the host
+// PC has exited.
+#define ML_ERROR_GRACEFUL_TERMINATION 0
+
+// This error is passed to ConnListenerConnectionTerminated() if no video data
+// was ever received for this connection after waiting several seconds. It likely
+// indicates a problem with traffic on UDP 47998 due to missing or incorrect
+// firewall or port forwarding rules.
+#define ML_ERROR_NO_VIDEO_TRAFFIC -100
+
+// This error is passed to ConnListenerConnectionTerminated() if a fully formed
+// frame could not be received after waiting several seconds. It likely indicates
+// an extremely unstable connection or a bitrate that is far too high.
+#define ML_ERROR_NO_VIDEO_FRAME -101
+
+// This error is passed to ConnListenerConnectionTerminated() if the stream ends
+// very soon after starting due to a graceful termination from the host. Usually
+// this seems to happen if DRM protected content is on-screen, or another issue
+// that prevents the encoder from being able to capture video successfully.
+#define ML_ERROR_UNEXPECTED_EARLY_TERMINATION -102
 
 // This callback is invoked to log debug message
 typedef void(*ConnListenerLogMessage)(const char* format, ...);
@@ -366,8 +413,6 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageFailed stageFailed;
     ConnListenerConnectionStarted connectionStarted;
     ConnListenerConnectionTerminated connectionTerminated;
-    void* deprecated1; // was displayMessage()
-    void* deprecated2; // was displayTransientMessage()
     ConnListenerLogMessage logMessage;
     ConnListenerRumble rumble;
     ConnListenerConnectionStatusUpdate connectionStatusUpdate;
@@ -413,8 +458,24 @@ void LiInterruptConnection(void);
 // from the integer passed to the ConnListenerStageXXX callbacks
 const char* LiGetStageName(int stage);
 
-// This function queues a mouse move event to be sent to the remote server.
+// This function queues a relative mouse move event to be sent to the remote server.
 int LiSendMouseMoveEvent(short deltaX, short deltaY);
+
+// This function queues a mouse position update event to be sent to the remote server.
+// This functionality is only reliably supported on GFE 3.20 or later. Earlier versions
+// may not position the mouse correctly.
+//
+// Absolute mouse motion doesn't work in many games, so this mode should not be the default
+// for mice when streaming. It may be desirable as the default touchscreen behavior if the
+// touchscreen is not the primary input method.
+//
+// The x and y values are transformed to host coordinates as if they are from a plane which
+// is referenceWidth by referenceHeight in size. This allows you to provide coordinates that
+// are relative to an arbitrary plane, such as a window, screen, or scaled video view.
+//
+// For example, if you wanted to directly pass window coordinates as x and y, you would set
+// referenceWidth and referenceHeight to your window width and height.
+int LiSendMousePositionEvent(short x, short y, short referenceWidth, short referenceHeight);
 
 // This function queues a mouse button event to be sent to the remote server.
 #define BUTTON_ACTION_PRESS 0x07
@@ -501,6 +562,58 @@ int LiGetPendingAudioFrames(void);
 // milliseconds rather than frames, which allows callers to be agnostic of the
 // negotiated audio frame duration.
 int LiGetPendingAudioDuration(void);
+
+// Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
+#define ML_PORT_INDEX_TCP_47984 0
+#define ML_PORT_INDEX_TCP_47989 1
+#define ML_PORT_INDEX_TCP_48010 2
+#define ML_PORT_INDEX_UDP_47998 8
+#define ML_PORT_INDEX_UDP_47999 9
+#define ML_PORT_INDEX_UDP_48000 10
+#define ML_PORT_INDEX_UDP_48010 11
+
+// Port flags for use with LiTestClientConnectivity()
+#define ML_PORT_FLAG_ALL       0xFFFFFFFF
+#define ML_PORT_FLAG_TCP_47984 0x0001
+#define ML_PORT_FLAG_TCP_47989 0x0002
+#define ML_PORT_FLAG_TCP_48010 0x0004
+#define ML_PORT_FLAG_UDP_47998 0x0100
+#define ML_PORT_FLAG_UDP_47999 0x0200
+#define ML_PORT_FLAG_UDP_48000 0x0400
+#define ML_PORT_FLAG_UDP_48010 0x0800
+
+// Returns the port flags that correspond to ports involved in a failing connection stage, or
+// connection termination error.
+//
+// These may be used to specifically test the ports that could have caused the connection failure.
+// If no ports are likely involved with a given failure, this function returns 0.
+unsigned int LiGetPortFlagsFromStage(int stage);
+unsigned int LiGetPortFlagsFromTerminationErrorCode(int errorCode);
+
+// Returns the IPPROTO_* value for the specified port index 
+int LiGetProtocolFromPortFlagIndex(int portFlagIndex);
+
+// Returns the port number for the specified port index
+unsigned short LiGetPortFromPortFlagIndex(int portFlagIndex);
+
+// Populates the output buffer with a stringified list of the port flags set in the input argument.
+// The second and subsequent entries will be prepended by 'separator' (if provided).
+// If the output buffer is too small, the output will be truncated to fit the provided buffer.
+void LiStringifyPortFlags(unsigned int portFlags, const char* separator, char* outputBuffer, int outputBufferLength);
+
+// This function may be used to test if the local network is blocking Moonlight's ports. It requires
+// a test server running on an Internet-reachable host. To perform a test, pass in the DNS hostname
+// of the test server, a reference TCP port to ensure the test host is reachable at all (something
+// very unlikely to blocked, like 80 or 443), and a set of ML_PORT_FLAG_* values corresponding to
+// the ports you'd like to test. On return, it returns ML_TEST_RESULT_INCONCLUSIVE on catastrophic error,
+// or the set of port flags that failed to validate. If all ports validate successfully, it returns 0.
+//
+// It's encouraged to not use the port flags explicitly (because GameStream ports may change in the future),
+// but to instead use ML_PORT_FLAG_ALL or LiGetPortFlagsFromStage() on connection failure.
+//
+// The test server is available at https://github.com/cgutman/gfe-loopback
+#define ML_TEST_RESULT_INCONCLUSIVE 0xFFFFFFFF
+unsigned int LiTestClientConnectivity(const char* testServer, unsigned short referencePort, unsigned int testPortFlags);
 
 #ifdef __cplusplus
 }
