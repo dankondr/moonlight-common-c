@@ -8,8 +8,9 @@
 #include <stdint.h>
 
 static const int *PORTS = pcc_getPortsFromConfig();
+static const int HTTP_PORT = PORTS[CONFIG_HTTP_PORT];
 static const int HTTPS_PORT = PORTS[CONFIG_HTTPS_PORT];
-static const int RTSP_SETUP_PORT = PORTS[CONFIG_HTTPS_PORT];
+static const int RTSP_SETUP_PORT = PORTS[CONFIG_RTSP_SETUP_PORT];
 static const int VIDEO_STREAM_PORT = PORTS[CONFIG_VIDEO_STREAM_PORT];
 static const int CONTROL_PORT = PORTS[CONFIG_CONTROL_PORT];
 static const int AUDIO_STREAM_PORT = PORTS[CONFIG_AUDIO_STREAM_PORT];

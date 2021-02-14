@@ -21,7 +21,7 @@ int *pcc_getPortsFromConfig() {
       exit(1);
     }
     fgetc(file);// Пропускаем пробельный символ
-    char port_string[5 +1];
+    char port_string[5 +1]; // длина порта + \0
     fgets(port_string, sizeof(port_string), file);
     char *pEnd;
     int port = (int) strtol(port_string, &pEnd, 10);
