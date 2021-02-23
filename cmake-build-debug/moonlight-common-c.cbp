@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6"/>
+	<Project>
+		<Option title="moonlight-common-c"/>
+		<Option makefile_is_custom="1"/>
+		<Option compiler="gcc"/>
+		<Option virtualFolders="CMake Files\;"/>
+		<Build>
+			<Target title="all">
+				<Option working_dir="/tmp/tmp.F9sPPF8C56/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 all"/>
+					<CompileFile command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="rebuild_cache">
+				<Option working_dir="/tmp/tmp.F9sPPF8C56/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 rebuild_cache"/>
+					<CompileFile command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="edit_cache">
+				<Option working_dir="/tmp/tmp.F9sPPF8C56/cmake-build-debug"/>
+				<Option type="4"/>
+				<MakeCommands>
+					<Build command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 edit_cache"/>
+					<CompileFile command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="moonlight-common-c">
+				<Option output="/tmp/tmp.F9sPPF8C56/cmake-build-debug/libmoonlight-common-c.so" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/tmp/tmp.F9sPPF8C56/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="3"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add option="-DLC_DEBUG"/>
+					<Add option="-DHAS_SOCKLEN_T"/>
+					<Add directory="/tmp/tmp.F9sPPF8C56/enet/include"/>
+					<Add directory="/tmp/tmp.F9sPPF8C56/reedsolomon"/>
+					<Add directory="/usr/lib/gcc/x86_64-linux-gnu/9/include"/>
+					<Add directory="/usr/local/include"/>
+					<Add directory="/usr/include/x86_64-linux-gnu"/>
+					<Add directory="/usr/include"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 moonlight-common-c"/>
+					<CompileFile command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+			<Target title="moonlight-common-c/fast">
+				<Option output="/tmp/tmp.F9sPPF8C56/cmake-build-debug/libmoonlight-common-c.so" prefix_auto="0" extension_auto="0"/>
+				<Option working_dir="/tmp/tmp.F9sPPF8C56/cmake-build-debug"/>
+				<Option object_output="./"/>
+				<Option type="3"/>
+				<Option compiler="gcc"/>
+				<Compiler>
+					<Add option="-DLC_DEBUG"/>
+					<Add option="-DHAS_SOCKLEN_T"/>
+					<Add directory="/tmp/tmp.F9sPPF8C56/enet/include"/>
+					<Add directory="/tmp/tmp.F9sPPF8C56/reedsolomon"/>
+					<Add directory="/usr/lib/gcc/x86_64-linux-gnu/9/include"/>
+					<Add directory="/usr/local/include"/>
+					<Add directory="/usr/include/x86_64-linux-gnu"/>
+					<Add directory="/usr/include"/>
+				</Compiler>
+				<MakeCommands>
+					<Build command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 moonlight-common-c/fast"/>
+					<CompileFile command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 &quot;$file&quot;"/>
+					<Clean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+					<DistClean command="/usr/bin/make -j16 -f &quot;/tmp/tmp.F9sPPF8C56/cmake-build-debug/Makefile&quot;  VERBOSE=1 clean"/>
+				</MakeCommands>
+			</Target>
+		</Build>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/callbacks.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/compress.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/host.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/list.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/packet.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/peer.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/protocol.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/unix.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/enet/win32.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/reedsolomon/rs.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/reedsolomon/rs.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/AudioStream.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/ByteBuffer.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/ByteBuffer.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/Connection.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/ConnectionTester.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/ControlStream.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/FakeCallbacks.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/InputStream.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/LinkedBlockingQueue.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/LinkedBlockingQueue.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/Misc.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/Platform.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/Platform.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/PlatformSockets.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/PlatformSockets.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/PortConfigCoder.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/PortConfigCoder.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/Ports.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtpFecQueue.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtpFecQueue.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtpReorderQueue.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtpReorderQueue.h">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtspConnection.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/RtspParser.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/SdpGenerator.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/SimpleStun.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/VideoDepacketizer.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/src/VideoStream.c">
+			<Option target="moonlight-common-c"/>
+		</Unit>
+		<Unit filename="/tmp/tmp.F9sPPF8C56/CMakeLists.txt">
+			<Option virtualFolder="CMake Files\"/>
+		</Unit>
+	</Project>
+</CodeBlocks_project_file>
